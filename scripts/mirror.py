@@ -1279,7 +1279,21 @@ class GeminiSyncer:
         This is the most reliable method since transcripts contain the
         full workspace path in user metadata.
         """
-        workspace_str = str(self.workspace)
+        import os
+        normalized_workspace = os.path.normpath(str(self.workspace))
+        
+        # Build set of search patterns (all case-insensitive)
+        patterns = set()
+        patterns.add(normalized_workspace.lower())
+        patterns.add(normalized_workspace.replace("\\", "/").lower())
+        patterns.add(normalized_workspace.replace("/", "\\").lower())
+        patterns.add(normalized_workspace.replace("\\", "\\\\").lower())
+        patterns.add(normalized_workspace.replace("/", "\\\\").lower())
+
+        def is_workspace_in_text(text: str) -> bool:
+            text_lower = text.lower()
+            return any(pat in text_lower for pat in patterns)
+
         conv_ids: set[str] = set()
 
         # Scan all transcript files for workspace path references
@@ -1288,7 +1302,7 @@ class GeminiSyncer:
         ):
             try:
                 content = transcript_path.read_text(errors="replace")
-                if workspace_str in content:
+                if is_workspace_in_text(content):
                     conv_id = transcript_path.parent.parent.parent.name
                     conv_ids.add(conv_id)
             except OSError:
@@ -1310,7 +1324,7 @@ class GeminiSyncer:
             if transcript.exists():
                 try:
                     content = transcript.read_text(errors="replace")
-                    if workspace_str in content:
+                    if is_workspace_in_text(content):
                         conv_ids.add(conv_id)
                 except OSError:
                     continue
