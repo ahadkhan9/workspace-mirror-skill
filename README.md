@@ -4,7 +4,11 @@
 [![License](https://img.shields.io/github/license/ahadkhan9/workspace-mirror-skill?style=flat-color)](LICENSE)
 [![OCI Registry](https://img.shields.io/badge/OCI-ghcr.io-blue?style=flat-color)](https://github.com/ahadkhan9/workspace-mirror-skill/pkgs/container/workspace-mirror-skill)
 
+> [!IMPORTANT]
+> This skill is specifically designed and optimized to be **highly useful for the Google Antigravity IDE**, providing developers and agentic workflows with automatic session preservation, offline viewing, and backup capabilities.
+
 An autonomous agent capability (Skill) for the Google Antigravity IDE and other agentic frameworks that automatically backs up, mirrors, and compiles conversation history, IDE database states, and workspace artifacts into a rich, interactive, standalone local dashboard.
+
 
 ---
 
