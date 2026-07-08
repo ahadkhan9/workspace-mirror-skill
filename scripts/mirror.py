@@ -1220,7 +1220,7 @@ class SyncState:
         self._data: dict[str, Any] = {"files": {}}
         if self._path.exists():
             try:
-                self._data = json.loads(self._path.read_text())
+                self._data = json.loads(self._path.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 self._data = {"files": {}}
 
@@ -1254,7 +1254,7 @@ class SyncState:
     def save(self) -> None:
         """Persist state to disk."""
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(json.dumps(self._data, indent=2))
+        self._path.write_text(json.dumps(self._data, indent=2), encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -1272,6 +1272,50 @@ class GeminiSyncer:
 
     # -- Discovery ----------------------------------------------------------
 
+    def _get_path_variations(self, path: Path) -> set[str]:
+        """Generate all possible path strings for matching in the transcript log.
+        
+        Handles forward/backward slashes, JSON-escaped slashes, and platform-specific
+        variations (like Git Bash drive mounts /c/... or Cygwin /cygdrive/c/...) 
+        for robustness across all operating systems and terminals.
+        """
+        try:
+            abs_path = path.resolve()
+        except Exception:
+            abs_path = path
+
+        path_str = str(abs_path)
+        variations = {path_str.lower()}
+
+        # Core slashes variations
+        variations.add(path_str.replace("\\", "/").lower())
+        variations.add(path_str.replace("/", "\\").lower())
+        variations.add(path_str.replace("\\", "\\\\").lower())
+        variations.add(path_str.replace("/", "\\\\").lower())
+
+        # Windows-specific drive letter variations (e.g. C:\Path -> /c/Path)
+        drive = abs_path.drive
+        if drive and len(drive) == 2 and drive[1] == ":":
+            drive_letter = drive[0].lower()
+            try:
+                subpath = abs_path.relative_to(drive).as_posix()
+            except Exception:
+                subpath = path_str[2:].replace("\\", "/")
+            
+            subpath = subpath.lstrip("/")
+
+            # Git Bash / MSYS style: /c/path
+            git_bash = f"/{drive_letter}/{subpath}".lower()
+            variations.add(git_bash)
+            variations.add(git_bash.replace("/", "\\\\"))
+
+            # Cygwin style: /cygdrive/c/path
+            cygwin = f"/cygdrive/{drive_letter}/{subpath}".lower()
+            variations.add(cygwin)
+            variations.add(cygwin.replace("/", "\\\\"))
+
+        return variations
+
     def discover_conversations(self) -> list[str]:
         """Find all conversation IDs linked to this workspace.
 
@@ -1279,16 +1323,7 @@ class GeminiSyncer:
         This is the most reliable method since transcripts contain the
         full workspace path in user metadata.
         """
-        import os
-        normalized_workspace = os.path.normpath(str(self.workspace))
-        
-        # Build set of search patterns (all case-insensitive)
-        patterns = set()
-        patterns.add(normalized_workspace.lower())
-        patterns.add(normalized_workspace.replace("\\", "/").lower())
-        patterns.add(normalized_workspace.replace("/", "\\").lower())
-        patterns.add(normalized_workspace.replace("\\", "\\\\").lower())
-        patterns.add(normalized_workspace.replace("/", "\\\\").lower())
+        patterns = self._get_path_variations(self.workspace)
 
         def is_workspace_in_text(text: str) -> bool:
             text_lower = text.lower()
@@ -1301,7 +1336,7 @@ class GeminiSyncer:
             "*/.system_generated/logs/transcript.jsonl"
         ):
             try:
-                content = transcript_path.read_text(errors="replace")
+                content = transcript_path.read_text(encoding="utf-8", errors="replace")
                 if is_workspace_in_text(content):
                     conv_id = transcript_path.parent.parent.parent.name
                     conv_ids.add(conv_id)
@@ -1323,7 +1358,7 @@ class GeminiSyncer:
             )
             if transcript.exists():
                 try:
-                    content = transcript.read_text(errors="replace")
+                    content = transcript.read_text(encoding="utf-8", errors="replace")
                     if is_workspace_in_text(content):
                         conv_ids.add(conv_id)
                 except OSError:
@@ -1436,7 +1471,7 @@ class GeminiSyncer:
             return "# Transcript\n\n*No transcript file found.*\n", None, None
 
         steps: list[dict] = []
-        for line in transcript_path.read_text(errors="replace").splitlines():
+        for line in transcript_path.read_text(encoding="utf-8", errors="replace").splitlines():
             line = line.strip()
             if not line:
                 continue
@@ -1753,11 +1788,11 @@ class GeminiSyncer:
 
         # 1. Convert transcript → markdown
         transcript_md, first_msg, first_ts = self.convert_transcript(conv_id)
-        (session_dir / "transcript.md").write_text(transcript_md)
+        (session_dir / "transcript.md").write_text(transcript_md, encoding="utf-8")
 
         # 2. Extract DB metadata → markdown
         db_summary = self.extract_db_summary(conv_id)
-        (session_dir / "conversation.md").write_text(db_summary)
+        (session_dir / "conversation.md").write_text(db_summary, encoding="utf-8")
 
         # 3. Copy brain artifacts
         artifacts = self.copy_brain_artifacts(conv_id, session_dir)
@@ -1796,7 +1831,7 @@ class GeminiSyncer:
 
             transcript = session_path / "transcript.md"
             if transcript.exists():
-                content = transcript.read_text()
+                content = transcript.read_text(encoding="utf-8")
                 for line in content.splitlines():
                     if "**Date**" in line and "|" in line:
                         parts = line.split("|")
@@ -1887,7 +1922,7 @@ class GeminiSyncer:
         md.append("")
         md.append("*Generated by `sync_gemini.py`*")
 
-        (self.output_dir / "index.md").write_text("\n".join(md))
+        (self.output_dir / "index.md").write_text("\n".join(md), encoding="utf-8")
 
     # -- Viewer Generation --------------------------------------------------
 
@@ -1908,13 +1943,13 @@ class GeminiSyncer:
             transcript_md = ""
             transcript_file = session_path / "transcript.md"
             if transcript_file.exists():
-                transcript_md = transcript_file.read_text(errors="replace")
+                transcript_md = transcript_file.read_text(encoding="utf-8", errors="replace")
 
             # Read conversation (DB metadata) markdown
             conversation_md = ""
             conversation_file = session_path / "conversation.md"
             if conversation_file.exists():
-                conversation_md = conversation_file.read_text(errors="replace")
+                conversation_md = conversation_file.read_text(encoding="utf-8", errors="replace")
 
             # Collect artifact file names and sizes
             artifacts: list[dict[str, Any]] = []
@@ -1931,7 +1966,7 @@ class GeminiSyncer:
                             if item.stat().st_size < 1024 * 1024:
                                 try:
                                     entry["content"] = item.read_text(
-                                        errors="replace"
+                                        encoding="utf-8", errors="replace"
                                     )
                                 except OSError:
                                     pass
@@ -2062,8 +2097,56 @@ class GeminiSyncer:
 
 
 # ---------------------------------------------------------------------------
-# Watch Mode — fswatch integration
+# Watch Mode — fswatch integration with pure-Python fallback
 # ---------------------------------------------------------------------------
+
+def watch_mode_fallback(workspace: Path, force: bool = False) -> None:
+    """A pure-Python fallback directory watcher that polls for changes.
+
+    This works on all platforms (including Windows) and does not require fswatch.
+    """
+    print("👀 Watching for changes (polling mode)…")
+    watch_dirs = [CONVERSATIONS_DIR, BRAIN_DIR]
+    print(f"   Monitoring: {', '.join(d.name for d in watch_dirs)}")
+    print("   Press Ctrl+C to stop.\n")
+
+    syncer = GeminiSyncer(workspace, force=force)
+    syncer.sync_all()
+
+    def get_latest_mtime() -> float:
+        max_mtime = 0.0
+        for d in watch_dirs:
+            if not d.exists():
+                continue
+            for entry in d.rglob("*"):
+                try:
+                    mtime = entry.stat().st_mtime
+                    if mtime > max_mtime:
+                        max_mtime = mtime
+                except OSError:
+                    continue
+        return max_mtime
+
+    try:
+        last_mtime = get_latest_mtime()
+        last_sync = time.time()
+        while True:
+            time.sleep(2)
+            current_mtime = get_latest_mtime()
+            if current_mtime > last_mtime:
+                now = time.time()
+                if now - last_sync >= 5:
+                    last_mtime = current_mtime
+                    last_sync = now
+                    print(
+                        f"\n🔔 Change detected at "
+                        f"{datetime.now().strftime('%H:%M:%S')}"
+                    )
+                    syncer = GeminiSyncer(workspace)
+                    syncer.sync_all()
+    except KeyboardInterrupt:
+        print("\n\n👋 Watch mode stopped.")
+
 
 def watch_mode(workspace: Path, force: bool = False) -> None:
     """Watch for file changes and re-sync automatically using fswatch.
@@ -2079,18 +2162,13 @@ def watch_mode(workspace: Path, force: bool = False) -> None:
             check=True,
         )
     except (FileNotFoundError, subprocess.CalledProcessError):
-        print("❌ fswatch is not installed. Install it with:")
-        if sys.platform == "darwin":
-            print("   brew install fswatch")
-        elif sys.platform.startswith("linux"):
-            print("   sudo apt-get install fswatch  (Debian/Ubuntu) or dnf install fswatch (Fedora)")
-        else:
-            print("   Please install fswatch for your operating system.")
-        sys.exit(1)
+        # Fall back to pure-python polling watcher on Windows or if fswatch is missing
+        watch_mode_fallback(workspace, force=force)
+        return
 
     watch_dirs = [str(CONVERSATIONS_DIR), str(BRAIN_DIR)]
 
-    print("👀 Watching for changes…")
+    print("👀 Watching for changes (using fswatch)…")
     print(
         f"   Monitoring: "
         f"{', '.join(Path(d).name for d in watch_dirs)}"
@@ -2137,6 +2215,14 @@ def watch_mode(workspace: Path, force: bool = False) -> None:
 
 def main() -> None:
     """Parse arguments and run the appropriate sync mode."""
+    # Force UTF-8 on standard streams on Windows to prevent UnicodeEncodeError when printing emojis/symbols
+    if sys.platform == "win32":
+        try:
+            sys.stdout.reconfigure(encoding="utf-8")
+            sys.stderr.reconfigure(encoding="utf-8")
+        except AttributeError:
+            pass
+
     parser = argparse.ArgumentParser(
         description=(
             "Mirror Antigravity IDE artifacts into a local "
@@ -2146,9 +2232,10 @@ def main() -> None:
         epilog="""\
 Examples:
   python sync_gemini.py                    # One-shot sync (current dir)
-  python sync_gemini.py --watch            # Watch mode with auto-sync
+  python sync_gemini.py --watch            # Watch mode with auto-sync (falls back to polling)
   python sync_gemini.py --force            # Force full re-sync
   python sync_gemini.py --workspace /path  # Specify workspace path
+  python sync_gemini.py --open             # Open viewer in default browser after sync
         """,
     )
     parser.add_argument(
@@ -2161,13 +2248,19 @@ Examples:
     parser.add_argument(
         "--watch",
         action="store_true",
-        help="Watch for changes and auto-sync using fswatch",
+        help="Watch for changes and auto-sync using fswatch (falls back to polling)",
     )
     parser.add_argument(
         "--force",
         "-f",
         action="store_true",
         help="Force re-sync even if files haven't changed",
+    )
+    parser.add_argument(
+        "--open",
+        "-o",
+        action="store_true",
+        help="Open the generated viewer.html in your default web browser after sync",
     )
 
     args = parser.parse_args()
@@ -2177,6 +2270,11 @@ Examples:
     else:
         syncer = GeminiSyncer(args.workspace, force=args.force)
         syncer.sync_all()
+        if args.open:
+            import webbrowser
+            viewer_path = syncer.output_dir / "viewer.html"
+            print("\n🌐 Opening viewer in default browser...")
+            webbrowser.open(viewer_path.absolute().as_uri())
 
 
 if __name__ == "__main__":
